@@ -91,8 +91,7 @@ Generate an appropriate SQL query that answers the user's need."""
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
-                messages=messages,
-                temperature=0.3,  # Lower temperature for more precise SQL
+                messages=messages
             )
 
             llm_response = response.choices[0].message.content
@@ -173,8 +172,7 @@ Refine the SQL query accordingly."""
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.3,
+                ]
             )
 
             llm_response = response.choices[0].message.content
@@ -269,8 +267,7 @@ Provide a clear, concise explanation."""
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.5,
+                ]
             )
 
             return response.choices[0].message.content

@@ -6,7 +6,6 @@ from pathlib import Path
 
 from metadata_loader import MetadataLoader
 from search_engine import SearchEngine
-from query_refiner import QueryRefiner
 from sql_generator import SQLGenerator
 from display_sql import display_generated_sql
 from azure_auth import setup_azure_openai_client
@@ -50,18 +49,17 @@ def initialize_system():
     # Initialize search engine
     search_engine = SearchEngine(yaml_metadata, txt_descriptions)
 
-    # Initialize query refiner
-    query_refiner = QueryRefiner(client, model)
-
     # Initialize SQL generator
     sql_generator = SQLGenerator(client, model)
 
-    return search_engine, query_refiner, sql_generator, (yaml_metadata, txt_descriptions), mode
+    return search_engine, sql_generator, (yaml_metadata, txt_descriptions), mode
 
 
 def display_search_result(result, index):
     """Display a single search result."""
-    with st.expander(f"#{index + 1} - {result.get_table_title()} ({result.get_source_type().upper()})", expanded=index == 0):
+    # Use container instead of expander for stable display
+    st.markdown(f"### #{index + 1} - {result.get_table_title()} ({result.get_source_type().upper()})")
+    with st.container(border=True):
         col1, col2 = st.columns([2, 1])
 
         with col1:
@@ -115,11 +113,11 @@ def display_search_result(result, index):
 
 def main():
     """Main application."""
-    st.title("🔍 Query Suggestion Service")
-    st.markdown("Search metadata and generate SQL queries with AI assistance")
+    st.title("🎯 Query Suggestion Service")
+    st.markdown("Describe your data needs → Get SQL automatically")
 
     # Initialize system
-    search_engine, query_refiner, sql_generator, metadata, mode = initialize_system()
+    search_engine, sql_generator, metadata, mode = initialize_system()
 
     # Sidebar
     with st.sidebar:
@@ -145,10 +143,11 @@ def main():
         st.markdown("---")
         st.markdown("### Tips")
         st.markdown("""
-        - Search by table name, description, or column name
-        - Ask questions in natural language
-        - Use specific keywords for better results
-        - Try "show all AVS tables" or "tables with SSN column"
+        - Describe what data you need in natural language
+        - System finds tables and generates SQL automatically
+        - Review tables used in search results section
+        - Refine SQL using natural language below the query
+        - Example: "customer with loan applications"
         """)
 
     # Check if data directory exists
@@ -178,13 +177,16 @@ def main():
     if 'current_query' not in st.session_state:
         st.session_state.current_query = ""
 
+    if 'last_results' not in st.session_state:
+        st.session_state.last_results = None
+
     # Main search interface
-    st.markdown("## Enter Your Query")
+    st.markdown("## What data do you need?")
 
     query = st.text_input(
-        "What are you looking for?",
+        "Describe the data you want to query:",
         value=st.session_state.current_query,
-        placeholder="e.g., 'borrower information', 'tables with SSN', 'business banking data'",
+        placeholder="e.g., 'customer with loan applications', 'borrower information with SSN'",
         key="query_input"
     )
 
@@ -192,32 +194,25 @@ def main():
     if query != st.session_state.current_query:
         st.session_state.current_query = query
 
-    col1, col2, col3 = st.columns([1, 1, 4])
+    col1, col2 = st.columns([1, 5])
 
     with col1:
-        search_button = st.button("🔍 Search", type="primary", use_container_width=True)
+        search_and_generate_button = st.button("🎯 Search & Generate SQL", type="primary", use_container_width=True)
 
     with col2:
-        refine_button = st.button("✨ Get Suggestions", use_container_width=True)
-
-    with col3:
         if st.button("🗑️ Clear", use_container_width=True):
             st.session_state.conversation_history = []
             st.session_state.last_query = ""
             st.session_state.current_query = ""
-            st.session_state.last_refinement = None
             st.session_state.last_results = []
             st.session_state.generated_sql = None
             st.rerun()
 
-    # Process search
-    if query and (search_button or query != st.session_state.last_query):
+    # Process search and SQL generation (combined operation)
+    if query and search_and_generate_button:
         st.session_state.last_query = query
-        # Clear any previous refinement suggestions and generated SQL
-        st.session_state.last_refinement = None
-        st.session_state.generated_sql = None
 
-        with st.spinner("Searching..."):
+        with st.spinner("Searching for tables..."):
             # Convert source filter
             source_type = None if source_filter == "All" else source_filter.lower()
 
@@ -227,98 +222,32 @@ def main():
             # Store in session state
             st.session_state.last_results = results
 
-            # Display results
-            st.markdown("---")
-            st.markdown(f"## Search Results ({len(results)} found)")
+        # If we found results, automatically generate SQL
+        if results:
+            with st.spinner("Generating SQL query..."):
+                sql_result = sql_generator.generate_sql(
+                    user_query=query,
+                    search_results=results,
+                    conversation_history=st.session_state.conversation_history
+                )
 
-            if results:
-                for i, result in enumerate(results):
-                    display_search_result(result, i)
+                # Store in session state
+                st.session_state.generated_sql = sql_result
 
-                # Add SQL generation section
-                st.markdown("---")
-                st.markdown("## 🎯 Generate SQL Query")
+        st.rerun()
 
-                sql_col1, sql_col2 = st.columns([3, 1])
+    # Display search results (separate from search execution)
+    if 'last_results' in st.session_state and st.session_state.last_results is not None:
+        results = st.session_state.last_results
 
-                with sql_col1:
-                    st.markdown("Based on the tables above, generate a SQL query:")
-
-                with sql_col2:
-                    generate_sql_button = st.button("⚡ Generate SQL", type="primary", use_container_width=True)
-
-                if generate_sql_button:
-                    with st.spinner("Generating SQL query..."):
-                        # Generate SQL from search results
-                        sql_result = sql_generator.generate_sql(
-                            user_query=query,
-                            search_results=results,
-                            conversation_history=st.session_state.conversation_history
-                        )
-
-                        # Store in session state
-                        st.session_state.generated_sql = sql_result
-                        st.rerun()
-            else:
-                st.warning("No results found. Try different keywords or browse all tables.")
-
-                # Show suggestion
-                st.markdown("### Suggestions")
-                st.info(query_refiner.suggest_next_steps(query, results))
-
-    # Process refinement request
-    if query and refine_button:
-        with st.spinner("Analyzing your query..."):
-            # Get current results if available
-            results = st.session_state.get('last_results', [])
-
-            # Get refinement suggestions
-            refinement = query_refiner.analyze_query(
-                query,
-                results,
-                st.session_state.conversation_history
-            )
-
-            # Store refinement in session state
-            st.session_state.last_refinement = refinement
-
-    # Display refinement suggestions if available
-    if 'last_refinement' in st.session_state and st.session_state.last_refinement:
-        refinement = st.session_state.last_refinement
-
-        # Display refinement suggestions
         st.markdown("---")
-        st.markdown("## 💡 Query Suggestions")
+        st.markdown(f"## Search Results ({len(results)} found)")
 
-        col1, col2 = st.columns(2)
-
-        with col1:
-            if refinement.refined_query:
-                st.markdown("### Refined Query")
-                st.success(refinement.refined_query)
-
-                if st.button("🔍 Search with refined query"):
-                    # Update the current query with the refined query
-                    st.session_state.current_query = refinement.refined_query
-                    # Clear last_query so the search will trigger
-                    st.session_state.last_query = ""
-                    # Clear the refinement so it doesn't show after search
-                    st.session_state.last_refinement = None
-                    st.rerun()
-
-            if refinement.clarifying_questions:
-                st.markdown("### Clarifying Questions")
-                for question in refinement.clarifying_questions:
-                    st.write(f"❓ {question}")
-
-        with col2:
-            if refinement.suggested_filters:
-                st.markdown("### Suggested Filters")
-                st.json(refinement.suggested_filters)
-
-            if refinement.reasoning:
-                st.markdown("### Reasoning")
-                st.info(refinement.reasoning)
+        if results:
+            for i, result in enumerate(results):
+                display_search_result(result, i)
+        else:
+            st.warning("No results found. Try different keywords or browse all tables.")
 
     # Display generated SQL if available
     if 'generated_sql' in st.session_state and st.session_state.generated_sql:
